@@ -38,47 +38,27 @@ ENRICH_LOG2FC <- 1.0
 # Small pseudocount added to RPB before log2FC to handle zeros
 PSEUDOCOUNT <- 0.001
 
-# ── Gene list: HPA brain-enriched genes ──────────────────────────────────────
-# Pull "Tissue Enriched" and "Group Enriched" brain genes from the Human
-# Protein Atlas. These represent genes with >=4x higher expression in brain
-# vs other tissues, or enriched in a group of tissues that includes brain.
+# Seconds to sleep between gene fetches — keeps load on GTEx API reasonable
+SLEEP_BETWEEN_GENES <- 0.5
 
-message("Fetching brain gene list from Human Protein Atlas...")
+# ── Gene list: all well-characterised protein-coding genes ───────────────────
+# Use HPA "Evidence at protein level" — ~18,500 genes with confirmed protein
+# expression, covering the well-characterised portion of the proteome.
+# The brain-dominance filter downstream selects the relevant subset.
 
-hpa_fetch <- function(category) {
-  url <- paste0(
-    "https://www.proteinatlas.org/api/search_download.php",
-    "?search=tissue_category_rna%3Abrain%3B", category,
-    "&columns=g,eg&compress=no&format=tsv"
-  )
-  read.delim(url, stringsAsFactors = FALSE)
-}
+message("Fetching gene list from Human Protein Atlas...")
 
-hpa_brain <- dplyr::bind_rows(
-  hpa_fetch("Tissue+Enriched"),
-  hpa_fetch("Group+Enriched")
-) |>
-  dplyr::distinct(Gene) |>
-  dplyr::pull(Gene)
-
-# MAPT-like genes: Group Enriched in both brain and skeletal muscle.
-# These have mixed brain+peripheral expression with potential for
-# isoform-level differential targeting.
-hpa_brain_muscle <- intersect(
-  hpa_fetch("Group+Enriched") |> dplyr::pull(Gene),
-  {
-    url <- paste0("https://www.proteinatlas.org/api/search_download.php",
-                  "?search=tissue_category_rna%3Askeletal+muscle%3BGroup+Enriched",
-                  "&columns=g,eg&compress=no&format=tsv")
-    read.delim(url, stringsAsFactors = FALSE)$Gene
-  }
+hpa_all <- read.delim(
+  paste0("https://www.proteinatlas.org/api/search_download.php",
+         "?search=&columns=g,pe&compress=no&format=tsv"),
+  stringsAsFactors = FALSE
 )
 
-message("HPA brain-enriched genes: ", length(hpa_brain))
-message("HPA brain+muscle group-enriched (MAPT-like): ", length(hpa_brain_muscle))
+hpa_genes <- hpa_all |>
+  dplyr::filter(Evidence == "Evidence at protein level") |>
+  dplyr::pull(Gene)
 
-hpa_genes <- union(hpa_brain, hpa_brain_muscle)
-message("Total unique genes to screen: ", length(hpa_genes))
+message("Genes with protein evidence: ", length(hpa_genes))
 
 genes <- hpa_genes
 if (!is.null(TRIAL_N) && is.finite(TRIAL_N)) {
@@ -120,6 +100,8 @@ for (i in seq_along(genes)) {
     saveRDS(result, cache_file)
     long_data_list[[i]] <- result
   }
+
+  Sys.sleep(SLEEP_BETWEEN_GENES)
 }
 
 long_data <- dplyr::bind_rows(long_data_list)
