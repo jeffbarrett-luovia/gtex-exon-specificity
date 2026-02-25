@@ -18,8 +18,14 @@ source("R/specificity.R")
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
-# Minimum expr_fraction to treat an exon as expressed (not noise)
-NOISE_FLOOR <- 0.05
+# Set to a positive integer to run on only the first N genes (for testing).
+# Set to NULL (or Inf) for the full run.
+TRIAL_N <- NULL
+
+# Minimum reads-per-base in an exon's max tissue to treat it as expressed.
+# Used for cross-gene comparisons (expr_fraction is not suitable here as its
+# denominator scales with the most-expressed gene in the dataset).
+RPB_FLOOR <- 0.5
 
 # Minimum fraction of expressed exons with Brain as max organ
 # for a gene to pass the brain-dominance filter
@@ -48,16 +54,37 @@ hpa_fetch <- function(category) {
   read.delim(url, stringsAsFactors = FALSE)
 }
 
-hpa_genes <- dplyr::bind_rows(
+hpa_brain <- dplyr::bind_rows(
   hpa_fetch("Tissue+Enriched"),
   hpa_fetch("Group+Enriched")
 ) |>
   dplyr::distinct(Gene) |>
   dplyr::pull(Gene)
 
-message("HPA brain gene list: ", length(hpa_genes), " unique genes")
+# MAPT-like genes: Group Enriched in both brain and skeletal muscle.
+# These have mixed brain+peripheral expression with potential for
+# isoform-level differential targeting.
+hpa_brain_muscle <- intersect(
+  hpa_fetch("Group+Enriched") |> dplyr::pull(Gene),
+  {
+    url <- paste0("https://www.proteinatlas.org/api/search_download.php",
+                  "?search=tissue_category_rna%3Askeletal+muscle%3BGroup+Enriched",
+                  "&columns=g,eg&compress=no&format=tsv")
+    read.delim(url, stringsAsFactors = FALSE)$Gene
+  }
+)
+
+message("HPA brain-enriched genes: ", length(hpa_brain))
+message("HPA brain+muscle group-enriched (MAPT-like): ", length(hpa_brain_muscle))
+
+hpa_genes <- union(hpa_brain, hpa_brain_muscle)
+message("Total unique genes to screen: ", length(hpa_genes))
 
 genes <- hpa_genes
+if (!is.null(TRIAL_N) && is.finite(TRIAL_N)) {
+  genes <- head(genes, TRIAL_N)
+  message("TRIAL MODE: using first ", length(genes), " genes")
+}
 
 # ── Fetch data (with per-gene checkpointing) ─────────────────────────────────
 # Each gene is saved to cache/ as it completes. Re-running the script skips
@@ -128,13 +155,13 @@ exon_detail <- scores |>
 gene_summary <- exon_detail |>
   dplyr::group_by(gene_symbol) |>
   dplyr::summarise(
-    n_expressed       = sum(expr_fraction > NOISE_FLOOR, na.rm = TRUE),
+    n_expressed       = sum(max_median > RPB_FLOOR, na.rm = TRUE),
     n_brain_max       = sum(max_tissue == "Brain" &
-                            expr_fraction > NOISE_FLOOR, na.rm = TRUE),
+                            max_median > RPB_FLOOR, na.rm = TRUE),
     pct_brain         = n_brain_max / pmax(n_expressed, 1),
-    n_brain_enriched  = sum(expr_fraction > NOISE_FLOOR &
+    n_brain_enriched  = sum(max_median > RPB_FLOOR &
                             brain_muscle_log2fc >  ENRICH_LOG2FC, na.rm = TRUE),
-    n_muscle_enriched = sum(expr_fraction > NOISE_FLOOR &
+    n_muscle_enriched = sum(max_median > RPB_FLOOR &
                             brain_muscle_log2fc < -ENRICH_LOG2FC, na.rm = TRUE),
     .groups = "drop"
   )
@@ -152,7 +179,7 @@ exon_classified <- exon_detail |>
   dplyr::filter(gene_symbol %in% brain_dominant_genes$gene_symbol) |>
   dplyr::mutate(
     exon_class = dplyr::case_when(
-      expr_fraction < NOISE_FLOOR                       ~ "low_expression",
+      max_median < RPB_FLOOR                            ~ "low_expression",
       brain_muscle_log2fc >  ENRICH_LOG2FC              ~ "brain_enriched",
       brain_muscle_log2fc < -ENRICH_LOG2FC              ~ "muscle_enriched",
       TRUE                                              ~ "shared"
