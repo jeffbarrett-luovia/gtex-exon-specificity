@@ -24,16 +24,31 @@ compute_tau <- function(x) {
 #'
 #' @param long_df Long-format tibble as returned by fetch_tissue_exon_data().
 #'   Required columns: gencode_id, gene_symbol, exon_id, tissue, median,
-#'   and optionally chromosome, start, end, strand, exon_number.
+#'   and optionally chromosome, start, end, strand, exon_number, organ.
+#' @param level "organ" (default) collapses sub-tissues to their broad organ
+#'   group (max RPB per organ) before computing Tau, correcting for unequal
+#'   tissue representation (e.g. 13 brain regions vs 1 heart). "tissue"
+#'   computes Tau on all individual tissues as-is.
 #' @return One-row-per-exon summary tibble with Tau and related metrics.
-#'   See plan schema for full column descriptions.
-score_exon_specificity <- function(long_df) {
+score_exon_specificity <- function(long_df, level = c("organ", "tissue")) {
+  level <- match.arg(level)
+
   # Coordinate columns that may be present
   coord_cols <- c("chromosome", "start", "end", "strand", "exon_number")
   has_coords  <- all(coord_cols %in% names(long_df))
 
+  # Collapse to organ level if requested
+  scoring_df <- if (level == "organ" && "organ" %in% names(long_df)) {
+    long_df |>
+      dplyr::group_by(gencode_id, gene_symbol, exon_id, organ) |>
+      dplyr::summarise(median = max(median, na.rm = TRUE), .groups = "drop") |>
+      dplyr::rename(tissue = organ)
+  } else {
+    long_df
+  }
+
   # Core per-exon summary
-  scored <- long_df |>
+  scored <- scoring_df |>
     dplyr::group_by(gencode_id, gene_symbol, exon_id) |>
     dplyr::summarise(
       tau                = compute_tau(median),

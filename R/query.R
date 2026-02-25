@@ -139,12 +139,17 @@ fetch_tissue_exon_data <- function(gene_symbols,
   # Drop gene_symbol from coords to avoid duplication; it comes from expr
   coords_slim <- dplyr::select(coords, -gene_symbol)
 
+  message("Fetching tissue-to-organ mapping...")
+  tissue_map <- gtexr::get_tissue_site_detail() |>
+    dplyr::select(tissue = tissueSiteDetailId, organ = tissueSite)
+
   message("Joining coordinates onto expression data...")
   result <- dplyr::left_join(expr, coords_slim, by = c("gencode_id", "exon_id")) |>
     dplyr::mutate(
       median = median / (end - start),
       unit   = "reads_per_base"
-    )
+    ) |>
+    dplyr::left_join(tissue_map, by = "tissue")
 
   if (length(exclude_tissues) > 0) {
     result <- dplyr::filter(result, !tissue %in% exclude_tissues)
