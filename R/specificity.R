@@ -69,7 +69,8 @@ score_exon_specificity <- function(long_df, level = c("organ", "tissue")) {
     )
 
   # Per-tissue max expression across all exons in the dataset
-  tissue_max <- long_df |>
+  # (use scoring_df so names match max_tissue — organ names at organ level)
+  tissue_max <- scoring_df |>
     dplyr::group_by(tissue) |>
     dplyr::summarise(tissue_max_median = max(median, na.rm = TRUE), .groups = "drop")
 
@@ -98,4 +99,29 @@ score_exon_specificity <- function(long_df, level = c("organ", "tissue")) {
       tau
     ) |>
     dplyr::arrange(gene_symbol, exon_number)
+}
+
+#' Pivot long expression data to one column per organ
+#'
+#' Returns max RPB per organ per exon, suitable for pairwise organ contrasts.
+#' Organ names are normalised (spaces → underscores) for clean column names.
+#'
+#' @param long_df Long-format tibble as returned by fetch_tissue_exon_data().
+#'   Must contain an 'organ' column.
+#' @return Wide tibble: one row per (gencode_id, gene_symbol, exon_id),
+#'   one column per organ containing max RPB across its sub-tissues.
+pivot_organ_expression <- function(long_df) {
+  if (!"organ" %in% names(long_df)) {
+    stop("long_df must contain an 'organ' column; use fetch_tissue_exon_data().")
+  }
+
+  long_df |>
+    dplyr::mutate(organ = gsub(" ", "_", organ)) |>
+    dplyr::group_by(gencode_id, gene_symbol, exon_id, organ) |>
+    dplyr::summarise(max_rpb = max(median, na.rm = TRUE), .groups = "drop") |>
+    tidyr::pivot_wider(
+      names_from  = organ,
+      values_from = max_rpb,
+      values_fill = 0
+    )
 }

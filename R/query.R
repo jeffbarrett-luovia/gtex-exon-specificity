@@ -76,23 +76,29 @@ fetch_exon_expression <- function(gencode_ids,
 #' @return Tibble with columns: gencode_id, exon_id, exon_number,
 #'   chromosome, start, end, strand.
 fetch_exon_coordinates <- function(gencode_ids, dataset_id = "gtex_v10") {
-  raw <- gtexr::get_collapsed_gene_model_exon(
-    gencodeId    = gencode_ids,
-    datasetId    = dataset_id,
-    itemsPerPage = 10000L
-  )
+  results <- vector("list", length(gencode_ids))
 
-  dplyr::transmute(
-    raw,
-    gencode_id  = gencodeId,
-    gene_symbol = geneSymbol,
-    exon_id     = exonId,
-    exon_number = as.integer(exonNumber),
-    chromosome  = chromosome,
-    start       = start,
-    end         = end,
-    strand      = strand
-  )
+  for (i in seq_along(gencode_ids)) {
+    raw <- gtexr::get_collapsed_gene_model_exon(
+      gencodeId    = gencode_ids[[i]],
+      datasetId    = dataset_id,
+      itemsPerPage = 10000L
+    )
+
+    results[[i]] <- dplyr::transmute(
+      raw,
+      gencode_id  = gencodeId,
+      gene_symbol = geneSymbol,
+      exon_id     = exonId,
+      exon_number = as.integer(exonNumber),
+      chromosome  = chromosome,
+      start       = start,
+      end         = end,
+      strand      = strand
+    )
+  }
+
+  dplyr::bind_rows(results)
 }
 
 #' Convenience wrapper: fetch expression + coordinates for a list of gene symbols
