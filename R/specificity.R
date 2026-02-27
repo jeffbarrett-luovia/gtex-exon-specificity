@@ -68,18 +68,13 @@ score_exon_specificity <- function(long_df, level = c("organ", "tissue")) {
       fold_change = dplyr::if_else(mean_other == 0, NA_real_, max_median / mean_other)
     )
 
-  # Per-tissue max expression across all exons in the dataset
-  # (use scoring_df so names match max_tissue — organ names at organ level)
-  tissue_max <- scoring_df |>
-    dplyr::group_by(tissue) |>
-    dplyr::summarise(tissue_max_median = max(median, na.rm = TRUE), .groups = "drop")
-
+  # expr_fraction: exon's peak expression relative to the gene's top exon
   scored <- scored |>
-    dplyr::left_join(tissue_max, by = c("max_tissue" = "tissue")) |>
+    dplyr::group_by(gene_symbol) |>
     dplyr::mutate(
-      expr_fraction = max_median / tissue_max_median
+      expr_fraction = max_median / max(max_median, na.rm = TRUE)
     ) |>
-    dplyr::select(-tissue_max_median)
+    dplyr::ungroup()
 
   if (!has_coords) {
     return(scored)

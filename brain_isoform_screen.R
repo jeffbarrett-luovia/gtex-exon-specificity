@@ -41,70 +41,84 @@ PSEUDOCOUNT <- 0.001
 # Seconds to sleep between gene fetches — keeps load on GTEx API reasonable
 SLEEP_BETWEEN_GENES <- 0.5
 
-# ── Gene list: all well-characterised protein-coding genes ───────────────────
-# Use HPA "Evidence at protein level" — ~18,500 genes with confirmed protein
-# expression, covering the well-characterised portion of the proteome.
-# The brain-dominance filter downstream selects the relevant subset.
-
-message("Fetching gene list from Human Protein Atlas...")
-
-hpa_all <- read.delim(
-  paste0("https://www.proteinatlas.org/api/search_download.php",
-         "?search=&columns=g,pe&compress=no&format=tsv"),
-  stringsAsFactors = FALSE
-)
-
-hpa_genes <- hpa_all |>
-  dplyr::filter(Evidence == "Evidence at protein level") |>
-  dplyr::pull(Gene)
-
-message("Genes with protein evidence: ", length(hpa_genes))
-
-genes <- hpa_genes
-if (!is.null(TRIAL_N) && is.finite(TRIAL_N)) {
-  genes <- head(genes, TRIAL_N)
-  message("TRIAL MODE: using first ", length(genes), " genes")
-}
-
-# ── Fetch data (with per-gene checkpointing) ─────────────────────────────────
-# Each gene is saved to cache/ as it completes. Re-running the script skips
-# already-fetched genes, so a failure can be resumed without starting over.
+# Set TRUE to skip HPA fetch and API calls entirely, using only cached RDS files.
+CACHE_ONLY <- TRUE
 
 CACHE_DIR <- "cache/brain_screen"
-dir.create(CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 
-message("=== Fetching GTEx v10 exon data for ", length(genes), " genes ===")
-message("Cache: ", CACHE_DIR)
+# ── Load data ────────────────────────────────────────────────────────────────
 
-long_data_list <- vector("list", length(genes))
+if (CACHE_ONLY) {
 
-for (i in seq_along(genes)) {
-  gene <- genes[[i]]
-  cache_file <- file.path(CACHE_DIR, paste0(gene, ".rds"))
+  message("=== CACHE_ONLY mode: loading all RDS files from ", CACHE_DIR, " ===")
+  rds_files <- list.files(CACHE_DIR, pattern = "\\.rds$", full.names = TRUE)
+  message("Found ", length(rds_files), " cached genes")
+  long_data <- dplyr::bind_rows(lapply(rds_files, readRDS))
 
-  if (file.exists(cache_file)) {
-    long_data_list[[i]] <- readRDS(cache_file)
-    next
-  }
+} else {
 
-  message("[", i, "/", length(genes), "] Fetching ", gene, "...")
-  result <- tryCatch(
-    fetch_tissue_exon_data(gene),
-    error = function(e) {
-      message("  WARN: failed for ", gene, " — ", conditionMessage(e))
-      NULL
-    }
+  # ── Gene list: all well-characterised protein-coding genes ─────────────────
+  # Use HPA "Evidence at protein level" — ~18,500 genes with confirmed protein
+  # expression, covering the well-characterised portion of the proteome.
+  # The brain-dominance filter downstream selects the relevant subset.
+
+  message("Fetching gene list from Human Protein Atlas...")
+
+  hpa_all <- read.delim(
+    paste0("https://www.proteinatlas.org/api/search_download.php",
+           "?search=&columns=g,pe&compress=no&format=tsv"),
+    stringsAsFactors = FALSE
   )
 
-  if (!is.null(result) && nrow(result) > 0) {
-    saveRDS(result, cache_file)
-    long_data_list[[i]] <- result
+  hpa_genes <- hpa_all |>
+    dplyr::filter(Evidence == "Evidence at protein level") |>
+    dplyr::pull(Gene)
+
+  message("Genes with protein evidence: ", length(hpa_genes))
+
+  genes <- hpa_genes
+  if (!is.null(TRIAL_N) && is.finite(TRIAL_N)) {
+    genes <- head(genes, TRIAL_N)
+    message("TRIAL MODE: using first ", length(genes), " genes")
   }
 
-  Sys.sleep(SLEEP_BETWEEN_GENES)
+  # ── Fetch data (with per-gene checkpointing) ───────────────────────────────
+  dir.create(CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
+
+  message("=== Fetching GTEx v10 exon data for ", length(genes), " genes ===")
+  message("Cache: ", CACHE_DIR)
+
+  long_data_list <- vector("list", length(genes))
+
+  for (i in seq_along(genes)) {
+    gene <- genes[[i]]
+    cache_file <- file.path(CACHE_DIR, paste0(gene, ".rds"))
+
+    if (file.exists(cache_file)) {
+      long_data_list[[i]] <- readRDS(cache_file)
+      next
+    }
+
+    message("[", i, "/", length(genes), "] Fetching ", gene, "...")
+    result <- tryCatch(
+      fetch_tissue_exon_data(gene),
+      error = function(e) {
+        message("  WARN: failed for ", gene, " — ", conditionMessage(e))
+        NULL
+      }
+    )
+
+    if (!is.null(result) && nrow(result) > 0) {
+      saveRDS(result, cache_file)
+      long_data_list[[i]] <- result
+    }
+
+    Sys.sleep(SLEEP_BETWEEN_GENES)
+  }
+
+  long_data <- dplyr::bind_rows(long_data_list)
 }
 
-long_data <- dplyr::bind_rows(long_data_list)
 message("Total rows fetched: ", nrow(long_data))
 
 # ── Score ─────────────────────────────────────────────────────────────────────
